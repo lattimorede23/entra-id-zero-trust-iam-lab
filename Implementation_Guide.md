@@ -2,7 +2,7 @@
 
 ### Microsoft Entra ID Reference Implementation
 
-**Author:** Derrick Lattimore, Senior Cyber GRC Architect **Scope:** Entra ID tenant identity plane, Azure RBAC boundary, Conditional Access, and Privileged Identity Management (PIM) **Status:** Reference architecture — lab/portfolio deployment
+**Author:** Derrick Lattimore Jr. · **Scope:** Entra ID tenant identity plane, Azure RBAC boundary, Conditional Access, and Privileged Identity Management (PIM) **Status:** Reference architecture for a lab/portfolio tenant. Sections 2 (directory tier) and 5 (PIM) are implemented by `Deployment_Script.ps1`. Sections 3 (Azure RBAC), 4 (Conditional Access), and 6 (access reviews, logging) are design: see the implementation status table in the [README](README.md#implementation-status).
 
 **Disclaimer:** The persona roster (Executive Management, Technical Operations, Player Rosters) is a fictional staffing scenario used to model an organization with realistic tiering — executive, operational, end-user, and privileged-admin roles. This is a demonstration of IAM architecture patterns and is not affiliated with, or representative of, any real organization.
 
@@ -31,6 +31,8 @@ This architecture treats identity as the primary security perimeter. Four princi
 | **3 — Standard Users** | `Sec-USA-PlayerRosters` | Pulisic, McKennie, Smith, Rodman | None | No role, no RBAC | No — baseline identity only |
 | **0 — Privileged Admin** | *(none — individual PIM eligibility)* | Derrick Lattimore | Entra ID directory role via PIM | Eligible Global Administrator | **None.** 100% JIT, 2-hour cap |
 
+**Not covered by this model:** the tenant's own administrator accounts (the account that created the tenant and a `Lab Admin` account, both visible in `evidence/01_tenant_users.png`). Their role assignments are not documented here. In a production design they would be two documented emergency-access (break-glass) accounts, excluded from Conditional Access and monitored for any sign-in.
+
 Tier 0 is intentionally excluded from group-based assignment. Global Administrator is the highest-impact role in the tenant; bundling it into a group (even a role-assignable one) adds an indirection layer that complicates access reviews for the single most sensitive grant in the environment. A named, individual PIM-eligible assignment is more auditable for a role this powerful, and matches Microsoft's own guidance to keep permanent Global Administrator membership at or near zero.
 
 ### Why Global Reader is delegated via a role-assignable group, not per-user
@@ -49,21 +51,16 @@ The Technical Operations tier (coaching \+ sports science staff) requires operat
 
 Isolation is enforced at the **resource** layer, not the identity layer:
 
+```text
 Subscription: usa-soccer-prod
-
-├── /sports-science           \<-- Sec-USA-TechnicalOps: Contributor (scoped HERE only)
-
+├── /sports-science           <-- Sec-USA-TechnicalOps: Contributor (scoped HERE only)
 │     ├── sports-science-storage
-
 │     ├── sports-science-analytics-workspace
-
 │     └── sports-science-compute
-
-├── /corporate-finance         \<-- No assignment. Implicit deny.
-
-├── /executive-reporting       \<-- No assignment. Implicit deny.
-
-└── /identity-core             \<-- No assignment. Implicit deny.
+├── /corporate-finance         <-- No assignment. Implicit deny.
+├── /executive-reporting       <-- No assignment. Implicit deny.
+└── /identity-core             <-- No assignment. Implicit deny.
+```
 
 Azure RBAC is deny-by-default: a principal with no role assignment on a scope has **zero** access to it, full stop — there is no "partial visibility" state to misconfigure. Scoping the Contributor grant to a single Resource Group means even a fully compromised coaching-staff credential, used to its maximum granted privilege, cannot enumerate, read, or modify anything outside `/sports-science`. This is the practical enforcement of the Player-data/financial-data separation the org chart implies.
 
@@ -71,34 +68,30 @@ Azure RBAC is deny-by-default: a principal with no role assignment on a scope ha
 
 ## 4\. Conditional Access Policies
 
-All four policies are deployed in **Report-only** mode first, validated against sign-in logs for 7–14 days, then flipped to **On**. Each policy below is expressed in exact logical form (the form used to author the underlying Graph `conditionalAccessPolicy` JSON).
+**Implementation status:** these policies are a design. `Deployment_Script.ps1` does not create them (Step 7 only prints the group IDs they target), and this repository holds no policy export or screenshot. Planned rollout: each policy starts in **Report-only** mode, is validated against sign-in logs for 7 to 14 days, then is switched **On**. Each policy below is expressed in exact logical form (the form used to author the underlying Graph `conditionalAccessPolicy` JSON).
 
 ### CA-01: MFA Baseline (all users, all cloud apps)
 
+```text
 IF     user IN {All Users}
-
 AND    app IN {All Cloud Apps}
-
 AND    NOT (user IN {Break-Glass Emergency Access Accounts})
-
 THEN   GRANT access
-
 REQUIRE  {Multifactor Authentication}
+```
 
 - **Exclusion is mandatory:** two dedicated break-glass accounts, excluded from every CA policy, credentials stored offline, monitored for any sign-in via a dedicated alert rule.  
 - Applies uniformly across Tier 1, 2, and 3 — there is no "trusted internal user" exemption, consistent with never-trust-always-verify.
 
 ### CA-02: Geo-Fencing — US / Canada / Mexico Named Location
 
+```text
 IF     user IN {All Users}
-
 AND    app IN {All Cloud Apps}
-
-AND    NOT (location IN {Named Location: "CONCACAF-Core" \= US, CA, MX})
-
+AND    NOT (location IN {Named Location: "CONCACAF-Core" = US, CA, MX})
 AND    NOT (user IN {Break-Glass Emergency Access Accounts})
-
 THEN   BLOCK access
+```
 
 - The Named Location `CONCACAF-Core` is defined as an IP-range-independent **country/region-based** named location (not IP ranges), covering the operational footprint of the program (US, Canada, Mexico) to accommodate cross-border travel for matches, camps, and tournaments within the region.  
 - Explicitly a **block**, not a grant-with-control — travel outside the three-country footprint should route through a documented travel-access exception process (temporary named-location addition \+ time-boxed CA policy exclusion for the traveling identity, reviewed and removed post-trip), not a standing bypass.  
@@ -106,40 +99,33 @@ THEN   BLOCK access
 
 ### CA-03: Device Compliance
 
+```text
 IF     user IN {All Users}
-
 AND    app IN {All Cloud Apps}
-
 AND    NOT (user IN {Break-Glass Emergency Access Accounts})
-
 THEN   GRANT access
-
 REQUIRE  {Device marked as Compliant (Intune)}
-
      OR  {Hybrid Azure AD Joined}
+```
 
-- Compliance is Intune-managed: disk encryption, OS minimum version, and screen-lock timeout are the three baseline compliance checks enforced org-wide.  
+- Requires Microsoft Intune for device compliance (no Intune licensing is shown in the lab evidence). Compliance is Intune-managed: disk encryption, OS minimum version, and screen-lock timeout are the three baseline compliance checks enforced org-wide.  
 - Tier 0 (Derrick) and Tier 2 (Technical Ops) are held to a **stricter** compliance profile at the Intune layer (shorter screen-lock timeout, mandatory endpoint EDR agent) — CA references the same "compliant" signal, but the underlying Intune compliance policy assigned to those groups is stricter than the one assigned to Tier 3\.
 
 ### CA-04: Risk-Based Sign-In (Identity Protection)
 
+```text
 IF     user IN {All Users}
-
 AND    app IN {All Cloud Apps}
-
 AND    signInRiskLevel IN {Medium, High}
-
 THEN   GRANT access
-
 REQUIRE  {Multifactor Authentication}
-
 AND    IF userRiskLevel IN {High}
-
        THEN REQUIRE {Secure Password Change}
+```
 
 - Sign-in risk (session-level: impossible travel, anonymized IP, unfamiliar sign-in properties) triggers step-up MFA.  
 - User risk (account-level: leaked credentials, confirmed compromise) triggers a forced secure password change **in addition to** MFA — this policy assumes the credential itself may be known to an attacker, not just the session.  
-- Requires Entra ID P2 licensing (Identity Protection risk signals are a P2 feature) — flagged explicitly here because it's the one policy in this set with a hard licensing dependency.
+- Requires Entra ID P2 licensing (Identity Protection risk signals are a P2 feature). The lab tenant has Microsoft Entra Suite licenses, which include P2.
 
 ### Policy Precedence
 
@@ -160,9 +146,9 @@ Derrick holds **zero permanent Global Administrator membership.** His entitlemen
 | Maximum activation duration | **2 hours** (`PT2H`, ISO 8601\) | Hard cap enforced by `Expiration_EndUser_Assignment` rule — bounds the blast-radius window of any single activation regardless of task length; long-running work requires re-activation, which re-triggers every control below |
 | MFA on activation | **Required** | `Enablement_EndUser_Assignment` includes `MultiFactorAuthentication` — a stolen session token alone cannot activate GA |
 | Justification on activation | **Required** | Free-text business justification logged to the audit trail on every activation, non-optional |
-| Approval | **Required (second-admin, single-stage)** | `Approval_EndUser_Assignment` — a second Privileged Role Administrator must approve before activation completes; prevents a single compromised or coerced account from unilaterally escalating to GA |
+| Approval | **Required (second-admin, single-stage)** | `Approval_EndUser_Assignment`: an approver must approve before activation completes, so a single compromised or coerced account cannot escalate to GA alone. The script does not name approvers, so PIM falls back to its defaults (Privileged Role Administrators and Global Administrators). |
 | Approver justification | **Required** | Approver must record a reason for approval, not just click accept |
-| Notification | On eligibility assignment, on activation, on approval | Sent to the security operations mailbox and to Derrick, independent of each other, so a silent activation cannot go unnoticed even if one notification channel fails |
+| Notification | On eligibility assignment, on activation, on approval | **Design; not configured by the script** (no notification rules are updated). Intended to go to a security operations mailbox and to the admin, so a silent activation cannot go unnoticed. |
 
 ### 5.3 Operational Workflow
 
@@ -171,7 +157,7 @@ Derrick holds **zero permanent Global Administrator membership.** His entitlemen
 3. Request enters **Pending Approval**; a designated second Privileged Role Administrator receives an approval request.  
 4. On approval, Global Administrator is active for **up to 2 hours**, expiring automatically — no manual deactivation step required, and no standing session survives past the window.  
 5. All five events (request, MFA, approval, activation, expiration) are written to `AuditLogs` and `pim_activity` sign-in logs, retained per the retention policy in `Compliance_Mapping.md`.  
-6. A scheduled Log Analytics / Sentinel query alerts security operations on: activation outside the CONCACAF-Core geo-fence, activation without a matching approval record, or more than one activation within a rolling 24-hour window (anomalous-frequency signal).
+6. *(Design, not deployed)* A scheduled Log Analytics / Sentinel query alerts security operations on: activation outside the CONCACAF-Core geo-fence, activation without a matching approval record, or more than one activation within a rolling 24-hour window (anomalous-frequency signal).
 
 ### 5.4 Why Not Time-Bound Eligibility Instead
 
@@ -180,6 +166,8 @@ An alternative design would set the *eligibility* window itself to expire (e.g.,
 ---
 
 ## 6\. Access Reviews & Continuous Verification
+
+*Design only. None of the items in this section are configured by the script or evidenced in this repository.*
 
 - `Sec-USA-ExecManagement`, `Sec-USA-TechnicalOps`, and the Global Administrator PIM eligibility are all placed under recurring **Access Reviews** (quarterly for Tier 0 eligibility, semi-annual for Tiers 1–2), with the resource owner (or a designated reviewer) required to explicitly re-certify each member.  
 - `Sec-USA-PlayerRosters` is reviewed annually given its zero-privilege posture — the review here is primarily a lifecycle/hygiene check (stale accounts, departed players), not a privilege check.  
