@@ -10,8 +10,8 @@
     Idempotent Microsoft Graph + Azure RBAC deployment that provisions the full
     identity substrate for a Zero Trust IAM reference architecture:
  
-      1. Four named identities (Executive, Technical Ops x2, Player roster x4,
-         Cloud Security Admin) — see PERSONA MANIFEST below.
+      1. Nine named identities (Executive x2, Technical Ops x2, Player roster x4,
+         Cloud Security Admin x1) — see $Personas below.
       2. Three Entra ID security groups implementing tiered access:
            - Sec-USA-ExecManagement   (role-assignable; Global Reader)
            - Sec-USA-TechnicalOps     (Azure RBAC Contributor @ RG scope)
@@ -19,7 +19,8 @@
       3. Group-based Entra directory role assignment (Global Reader) — NOT
          per-user — so privilege is auditable, revocable in one place, and
          survives personnel turnover without orphaned role grants.
-      4. Azure RBAC Contributor assignment scoped to a single Resource Group
+      4. [DESIGNED, NOT YET IMPLEMENTED: Step 5 below only logs a skip]
+         Azure RBAC Contributor assignment scoped to a single Resource Group
          (/sports-science) for the Technical Ops group — enforced at the
          Azure Resource Manager layer, not the identity layer, so a compromised
          coaching-staff credential cannot reach corporate or financial workloads.
@@ -30,7 +31,7 @@
          approval on every activation request.
  
 .NOTES
-    Author:   Derrick Lattimore — Senior Cyber GRC Architect
+    Author:   Derrick Lattimore Jr.
     Purpose:  Portfolio / reference implementation of a Zero Trust Entra ID
               identity plane. Designed to be run against a disposable lab
               or demo tenant (e.g. a Microsoft 365 Developer Program tenant).
@@ -356,7 +357,7 @@ $Personas | ForEach-Object {
         Group     = if ($_.Group) { $_.Group } else { "(none — PIM-eligible GA)" }
         Privilege = switch ($_.Group) {
             "Sec-USA-ExecManagement" { "Global Reader (tenant-wide, read-only)" }
-            "Sec-USA-TechnicalOps"   { "Azure RBAC Contributor @ /$SportsScienceResourceGroup" }
+            "Sec-USA-TechnicalOps"   { "Azure RBAC Contributor @ /$SportsScienceResourceGroup (designed; not applied by this script)" }
             "Sec-USA-PlayerRosters"  { "None (standard user)" }
             default                  { "Eligible Global Administrator (PIM, 2h cap, MFA+justification+approval)" }
         }
